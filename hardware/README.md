@@ -1,0 +1,2 @@
+- designed for hand soldering
+- footprint choices influenced by what I had on hand

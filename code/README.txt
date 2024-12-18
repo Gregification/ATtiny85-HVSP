@@ -6,11 +6,11 @@ REFRENCES
     winAVR user manual : if you downloaded the winAVR version there is a usermanual html file that is where ever winAVR is installed
 
 THINGS TO DOWNLOAD
-    avrdude : https://github.com/avrdudes/avrdude
-    avr-gcc and avr-binutils : https://www.nongnu.org/avr-libc/user-manual/overview.html
+    avrdude (to program tiny85): https://github.com/avrdudes/avrdude
+    avr-gcc and avr-binutils (avr software libs) : https://www.nongnu.org/avr-libc/user-manual/overview.html
 
 COMPILING & FLASHING
-    1. Compile for attiny85 - optimize for size , dont forget inclueds
+    1. Compile for attiny85 - optimize for size , dont forget includes
         avr-gcc --std=c99 -Wall -Os -mmcu=attiny85 main.c
 
     2. make Intel hex from the output

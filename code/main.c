@@ -1,13 +1,16 @@
 /**
- * master controller of the HVSP
- * target : ATtiny85
- *  WARNING: INTENDED ONLY TO BE USED AGAINST OTHER ATtiny85's
- *  a attiny85 that can be used to reset the fuses of other attiny85's (a non tirvial supporting circuit is needed)
+ * ATtiny85 HVSP reset lock recovery
+ *  code for master ATtiny85
+ * 
+ *  WARNING: ONLY TO BE USED AGAINST OTHER ATtiny85's
  * 
  * writes the fueses
  *  H   0xDF
  * 
- * note that the code is from the prespective of the master but the datasheet is from the slave
+ * note:
+ *  - code is pov of the master, but datasheet is slave pov
+ *  - master runs at 8 MHz
+ *  - master has Reset pin as GPIO
  */
 
 #ifndef __AVR_ATtiny85__
@@ -17,6 +20,8 @@
 #ifndef F_CPU
 #define F_CPU 8000000UL
 #endif
+
+#define CLK_DELAY_us    3   
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -28,113 +33,135 @@
 #define SII             _BV(PB1)
 #define SDO             _BV(PB2)
 #define SCI             _BV(PB3)
+#define VCC_CTRL        _BV(PB4)
+#define HV_CTRL         _BV(PB5)
 #define PROG_ENABLE0    SDI
 #define PROG_ENABLE1    SII
 #define PROG_ENABLE2    SDO
 
-#define HV_TRIGGER      _BV(PB4)
-
-uint16_t transfer(uint8_t sdi, uint8_t sii);
+typedef struct {
+    uint8_t input;
+    uint8_t instruction;
+    uint8_t output;
+} Instr;
+void transfer_instruction(Instr* txrx, uint8_t len);
 
 int main(){
     //------------------------------------------------------------------------------------
-    //  WARNING: INTENDED ONLY TO BE USED AGAINST OTHER ATtiny85's
+    //  WARNING: ONLY TO BE USED AGAINST OTHER ATtiny85's
     //------------------------------------------------------------------------------------
     
     //------------------------------------------------------------------------------------
     //  init
     //------------------------------------------------------------------------------------
 
-    DDRB |= SCI | SII | SDI | SDO | HV_TRIGGER;
+    DDRB |= SCI | SII | SDI | SDO | HV_CTRL | VCC_CTRL; // outputs
 
+    // everything to low
+    PORTB &= ~(SCI | SII | SDI | SDO | HV_CTRL | VCC_CTRL);
 
     //------------------------------------------------------------------------------------
     // enter HVSP mode - uP chapter 20.7.1
     //------------------------------------------------------------------------------------
 
     // 1. Set Prog_enable pins listed in Table 20-14 to “000”, RESET pin and VCC to 0V.
-    PORTB &= ~(PROG_ENABLE0 | PROG_ENABLE1 | PROG_ENABLE2 | HV_TRIGGER);
+    PORTB &= ~(PROG_ENABLE0 | PROG_ENABLE1 | PROG_ENABLE2 | HV_CTRL | VCC_CTRL);
 
-    // 2. Apply 4.5 - 5.5V between V CC and GND. Ensure that V CC reaches at least 1.8V within the next 20 μs.
+    _delay_ms(100); // wait for latches
 
-    // this chip running means #2 is already done
+    // 2. Apply 4.5 - 5.5V between VCC and GND. Ensure that VCC reaches at least 1.8V within the next 20 μs.
+    PORTB |= VCC_CTRL;
 
     // 3. Wait 20 - 60 μs, and apply 11.5 - 12.5V to RESET.
-    // - apply as soon as Vcc reaches .9v
-    _delay_us(15);             // sub min delay considering this chip runnning means the other chip is too
-    PORTB |= HV_TRIGGER;       // turn on HV to RESET
+    _delay_us(30);
+    PORTB |= HV_CTRL;
 
     // 4. Keep the Prog_enable pins unchanged for at least 10 μs after the High-voltage has been applied to
     //      ensure the Prog_enable Signature has been latched.
     _delay_us(15);
 
     // 5. Release the Prog_enable[2] pin to avoid drive contention on the Prog_enable[2]/SDO pin.
+    
+    // set PROG_ENABLE2 to Hi-Z input
     DDRB    &= ~PROG_ENABLE2;         // set as input
-    PORTB   &= ~PROG_ENABLE2;         // disable pull up
+    PORTB   &= ~PROG_ENABLE2;         // disable bias resistors
 
     // 6. Wait at least 300 μs before giving any serial instructions on SDI/SII.
-    _delay_ms(1);
-
-    // 7. Exit Programming mode by power the device down or by bringing RESET pin to 0V.
-
-    // nuh uh
+    _delay_us(350);
 
 
     //------------------------------------------------------------------------------------
     // program high fuses
     //------------------------------------------------------------------------------------
-    
-    transfer(0b0100'0000, 0b0100'1100);         // instruction 1 / 5
-    transfer(0b1101'1111, 0b0010'1100);         // instruction 2 / 6
-    transfer(0b0000'0000, 0b0111'0100);         // instruction 3 
-    transfer(0b0000'0000, 0b0111'1100);         // instruction 4
+    {
+        Instr *instrs;
+        
+        // set fuse bits to 0xDF
+        instrs = (Instr[4]){
+                  {0x40  ,   0x4C},
+                  {0xDF  ,   0x2C},
+                  {0x00  ,   0x74},
+                  {0x00  ,   0x7C},
+                };
+        transfer_instruction(instrs, 4);
+    }
 
     //------------------------------------------------------------------------------------
     // exit
     //------------------------------------------------------------------------------------
     
+    PORTB &= ~(VCC_CTRL | HV_CTRL);
+
+    while(true)
+        ;
+
     return 0;
-
 }
 
-uint16_t transfer_bit(uint8_t sdi_bit, uint8_t sii_bit){
-    //MSB first
-    //write on rising clock edge
-    //read on falling edge
+void transfer_instruction(Instr* txrx, uint8_t len){
+    if(!txrx)
+        return;
 
-    if(sdi_bit == 0)
-        PORTB &= ~SDI;
-    else
-        PORTB |= SDI;
+    /* basically just 11 bit SPI with the following gimics
+     *  - 2 parallel data lines, SDI and SII
+     *  - SDI, SII, and SDO are 8 bit values, MSB first, left aligned within the 11 bits
+     *  - SDI and SII uses SPI mode 1
+     *  - SDO uses SPI mode 0
+     *  - 0's are used as padding bits
+     */
 
-    if(sii_bit == 0)
-        PORTB &= ~SII;
-    else
-        PORTB |= SII;
-    
-    // clock to high
-    PORTB |= SCI;
-    _delay_loop_1(2);
+    PORTB &= ~SCI; // ensure clock is low (it should already be low)
 
-    // clock to low
-    PORTB &= ~SCI;
-    _delay_loop_1(2);
+    uint8_t packet_i;
+    for(packet_i = 0; packet_i < len; packet_i++){
+        
+        // this delay is not necesasry but makes waveform easier to read
+        _delay_us(CLK_DELAY_us);
 
-    // read and return
-    return (PINB & SDO) ? 1 : 0;
-}
+        uint8_t bit_i;
+        for(bit_i = 0; bit_i < 11; bit_i++){
 
-uint16_t transfer(uint8_t sdi, uint8_t sii){
-    uint8_t sdo = 0;
+            _delay_us(CLK_DELAY_us);
+            PORTB |= SCI;
 
-    sdo |= transfer_bit(0, 0) << 10;
+            _delay_us(CLK_DELAY_us);
+            PORTB &= ~SCI;
 
-    for(uint8_t i = 7; i >= 0; i--){
-        sdo |= transfer_bit((sdi >> i) & 1, (sii >> i) & 1) << (i+2);
+            // SDO
+            txrx[packet_i].output |= ((PINB | SDO) != 0) << (7-bit_i);
+
+            // SDI
+            if((txrx[packet_i].input       >> (7-bit_i)) & 1)
+                PORTB |= SDI;
+            else
+                PORTB &= ~SDI;
+
+            // SII
+            if((txrx[packet_i].instruction >> (7-bit_i)) & 1)
+                PORTB |= SII;
+            else
+                PORTB &= ~SII;
+
+        }
     }
-
-    sdo |= transfer_bit(0, 0) << 1;
-    sdo |= transfer_bit(0, 0) << 0;
-
-    return sdo;
 }
