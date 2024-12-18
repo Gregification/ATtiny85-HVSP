@@ -43,7 +43,7 @@ uses one ATTiny85 to recover other reset-locked ATtiny85's. Done by bringing the
 ---
 <div style="display:flex; align-items:top;">
     <img src="./demo/use_case.jpg" alt="board top with circuit sections outlined" width="49%">
-    <div style="margin-left:.5rem;">
+    <div style="margin-left:.5rem;" width="49%">
         <h3>Coloring</h3>
         <ul>
             <li>Green: reset-locked chip goes here</li>
